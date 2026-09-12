@@ -36,9 +36,60 @@ attacker would use), and **how to fix it**.
 | 📄 **Reporting** | Self-contained **HTML** report (executive summary, risk gauge, remediation roadmap, TLS tables, ATT&CK matrix), plus **JSON**, **Markdown** and **SARIF** (GitHub Code Scanning) | — |
 | 🔧 **Lifecycle** | `aegisscan update` (self-update via git or pip with upstream version check) and `aegisscan uninstall` (with `--purge-data`) | — |
 
+## Install
+
+AegisScan needs only **Python 3.9+** — no other dependencies, ever.
+
+### Windows (easiest)
+
+One command — installs straight from GitHub, no git required:
+
+```powershell
+pip install https://github.com/ronnibp/aegisscan/archive/refs/heads/main.zip
+```
+
+Then run it from any folder:
+
+```powershell
+aegisscan --version      # verify the install
+aegisscan demo           # scan the bundled vulnerable demo app
+aegisscan ui             # dashboard → http://127.0.0.1:8899
+```
+
+> No Python yet? Install it from [python.org/downloads](https://www.python.org/downloads/) and tick **"Add python.exe to PATH"** in the installer.
+
+### Linux / macOS
+
+```bash
+pip3 install https://github.com/ronnibp/aegisscan/archive/refs/heads/main.zip
+```
+
+### From source with git (any OS)
+
+```bash
+git clone https://github.com/ronnibp/aegisscan.git
+cd aegisscan
+pip install .                    # installs the `aegisscan` command
+# …or without installing, run straight from the folder:
+python -m aegisscan demo
+```
+
+Windows users can also just run the bundled installer script:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass -Force; .\install.ps1
+```
+
+### Keep it fresh / remove it
+
+```bash
+aegisscan update                 # self-update (git pull or pip upgrade)
+aegisscan uninstall              # remove (add --purge-data --yes to wipe data too)
+```
+
 ## Quick start
 
-Requires **Python 3.9+**. No dependencies, no build step.
+Already installed? No dependencies, no build step — just run:
 
 ```bash
 # 1. Run the demo scan against a bundled intentionally-vulnerable app
