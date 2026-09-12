@@ -1,0 +1,46 @@
+name: AegisScan self-scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * 1" # weekly, Mondays 03:00 UTC
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # for SARIF upload
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run AegisScan (SAST + secrets + SCA on this repository)
+        # aegisscan/scanners contains the rule *definitions* (they self-match),
+        # aegisscan/web is the dashboard SPA (escaped innerHTML templates),
+        # examples is the intentionally vulnerable demo.
+        run: |
+          python -m aegisscan scan --repo . --offline \
+            --exclude aegisscan/scanners --exclude aegisscan/web \
+            --exclude examples --exclude tests --exclude aegisscan-data \
+            --formats sarif,json,html --fail-on critical
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: aegisscan-data/reports/report-latest.sarif
+          wait-for-processing: true
+        if: always()
+
+      - name: Archive reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegisscan-reports
+          path: aegisscan-data/reports/
+        if: always()

@@ -1,0 +1,20 @@
+# AegisScan data (scan results, reports)
+aegisscan-data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local test certificates
+tests/fixtures/*.pem

@@ -1,0 +1,7 @@
+# Demo dependency manifest — deliberately old versions so the SCA engine finds CVEs
+django==1.11.0
+flask==0.10.1
+pyyaml==3.13
+requests==2.6.0
+paramiko==2.4.1
+pillow==5.2.0

@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aegisscan"
+version = "1.0.0"
+description = "AegisScan — unified multi-layer security scanner (SAST, SCA, secrets, web/DAST, TLS audit, ports, GitHub) with MITRE ATT&CK mapping and professional reporting"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "AegisScan Project" }]
+keywords = ["security", "scanner", "sast", "sca", "dast", "tls", "mitre", "attack", "vulnerability"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+]
+# Zero third-party dependencies — pure standard library.
+dependencies = []
+
+[project.scripts]
+aegisscan = "aegisscan.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/ronnibp/aegisscan"
+Documentation = "https://github.com/ronnibp/aegisscan/tree/main/docs"
+Issues = "https://github.com/ronnibp/aegisscan/issues"
+
+[tool.setuptools.packages.find]
+include = ["aegisscan*"]
+
+[tool.setuptools.package-data]
+aegisscan = ["web/*.html", "web/static/*"]
