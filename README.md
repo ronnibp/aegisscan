@@ -32,7 +32,9 @@ attacker would use), and **how to fix it**.
 | 🖧 **Network** | TCP connect scan of top-100 / custom ranges, banner grabbing, risky-service exposure (Docker, Redis, MongoDB, RDP, SMB…) | nmap |
 | 🐙 **GitHub** | Scan any public/token-readable repo by `owner/repo` — plus repository posture (public repo, missing license, unprotected default branch) | GitHub Advanced Security |
 | ⚔️ **MITRE ATT&CK** | Every finding mapped to the ATT&CK Enterprise technique it enables; interactive matrix in the UI and reports | MITRE ATT&CK |
+| ✨ **AI analysis** | Bring your own key: **OpenAI, Anthropic (Claude), Google Gemini, Z.ai (GLM), Zhipu GLM, Mistral, Groq, DeepSeek, xAI (Grok), Cohere, OpenRouter** or any OpenAI-compatible endpoint (Ollama, vLLM…) — executive summary, prioritized fixes and quick wins in the dashboard and reports | — |
 | 📄 **Reporting** | Self-contained **HTML** report (executive summary, risk gauge, remediation roadmap, TLS tables, ATT&CK matrix), plus **JSON**, **Markdown** and **SARIF** (GitHub Code Scanning) | — |
+| 🔧 **Lifecycle** | `aegisscan update` (self-update via git or pip with upstream version check) and `aegisscan uninstall` (with `--purge-data`) | — |
 
 ## Quick start
 
@@ -120,6 +122,42 @@ python -m aegisscan scan --github my-org/my-repo
 The integration downloads the repo tarball, runs the full code pipeline
 (secrets + SAST + SCA), and reports repository posture (visibility, license,
 branch protection when a token is supplied).
+
+## AI analysis (bring your own key)
+
+AegisScan can send a compact, redacted digest of your findings to an LLM and
+return an **executive summary, top-priority fixes, quick wins and next steps** —
+embedded in the dashboard and in HTML/Markdown reports.
+
+```bash
+# pick a provider (no args lists all + where to get keys)
+python -m aegisscan ai setup
+python -m aegisscan ai setup --provider openai     --api-key sk-...     [--model gpt-4o-mini]
+python -m aegisscan ai setup --provider anthropic  --api-key sk-ant-... [--model claude-sonnet-4-5]
+python -m aegisscan ai setup --provider google     --api-key AIza...    [--model gemini-2.0-flash]
+python -m aegisscan ai setup --provider zai        --api-key ...        [--model glm-4.6]
+python -m aegisscan ai setup --provider custom --base-url http://localhost:11434/v1 --model llama3
+
+python -m aegisscan ai test                        # verify the round-trip
+python -m aegisscan demo --ai                      # analyze while scanning
+python -m aegisscan ai explain <scan-id-or-json>   # analyze a saved scan
+python -m aegisscan scan --repo . --ai             # same, any scan command
+```
+
+Keys are stored locally in `aegisscan-data/config.json` (never committed) or
+read from standard environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
+`GEMINI_API_KEY`, `ZAI_API_KEY`, `MISTRAL_API_KEY`, `GROQ_API_KEY`,
+`DEEPSEEK_API_KEY`, `XAI_API_KEY`, `COHERE_API_KEY`, `OPENROUTER_API_KEY`).
+You can also configure everything in the dashboard's **AI Settings** page.
+
+## Updating & uninstalling
+
+```bash
+python -m aegisscan update            # check GitHub and self-update (git pull or pip upgrade)
+python -m aegisscan update --check    # only compare versions
+python -m aegisscan uninstall         # remove the package (keeps your data)
+python -m aegisscan uninstall --purge-data --yes   # also delete scans, reports, AI config
+```
 
 ## Documentation
 

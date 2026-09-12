@@ -58,6 +58,16 @@ The ATT&CK technique catalogue relevant to AegisScan's findings
 (25 techniques across 9 tactics), normalization, and `aggregate()` which
 builds `{tactic: {technique: [finding ids]}}` for the UI matrix and reports.
 
+### `core/ai.py`
+Provider-agnostic LLM client (stdlib urllib): 12 providers (OpenAI, Anthropic,
+Google Gemini, Z.ai/GLM, Zhipu GLM, Mistral, Groq, DeepSeek, xAI, Cohere,
+OpenRouter, custom OpenAI-compatible endpoints) behind four wire protocols
+(openai chat/completions, anthropic messages, gemini generateContent, cohere
+v2/chat). Config persists to `aegisscan-data/config.json` with per-provider
+environment-variable fallbacks. `analyze_result()` sends a compact, redacted
+findings digest and expects a structured Markdown analysis; the engine treats
+it as an optional `ai` module that can never fail a scan.
+
 ### `core/engine.py`
 `ScanEngine` maps target kinds to module pipelines, runs modules sequentially
 with live `ModuleStatus` updates (the server polls this), deduplicates

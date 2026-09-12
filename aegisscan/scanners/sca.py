@@ -15,7 +15,7 @@ import urllib.request
 from urllib.error import URLError
 
 from ..core.models import Finding, Severity, severity_from_cvss
-from ..core.utils import walk_files
+from ..core.utils import read_text, walk_files
 
 OSV_QUERYBATCH = "https://api.osv.dev/v1/querybatch"
 

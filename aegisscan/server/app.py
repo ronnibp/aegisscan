@@ -25,6 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .. import __product__, __version__
 from ..core import mitre
+from ..core import ai as ai_mod
 from ..core.engine import ScanEngine, MODULES_FOR_TARGET
 from ..core.models import ScanConfig, ScanResult, ScanTarget
 from ..core.report import render
@@ -67,6 +68,8 @@ def start_scan(payload: dict) -> str:
         osv_online=payload.get("osv_online", True),
         web_max_pages=int(payload.get("web_max_pages") or 25),
         web_probe_injection=payload.get("web_probe_injection", True),
+        excludes=payload.get("excludes") or [],
+        ai=bool(payload.get("ai", False)),
         label=payload.get("label") or "",
         github_token=os.environ.get("GITHUB_TOKEN", ""),
     )
@@ -117,7 +120,9 @@ class Handler(BaseHTTPRequestHandler):
                 load_saved_scans()
                 if path == "/api/meta":
                     return self._json(200, {"product": __product__, "version": __version__,
-                                            "modules": sorted({m for mods in MODULES_FOR_TARGET.values() for m in mods})})
+                                            "modules": sorted({m for mods in MODULES_FOR_TARGET.values() for m in mods} | {"ai"})})
+                if path == "/api/settings":
+                    return self._json(200, self.ai_settings())
                 if path == "/api/dashboard":
                     return self._json(200, self.dashboard())
                 if path == "/api/scans":
@@ -186,6 +191,37 @@ class Handler(BaseHTTPRequestHandler):
                 payload = self._body()
                 sid = start_scan(payload)
                 return self._json(200, {"scan_id": sid})
+            if path == "/api/settings":
+                payload = self._body()
+                cfg = ai_mod.save_config(provider=payload.get("provider") or "",
+                                         api_key=payload.get("api_key") or "",
+                                         model=payload.get("model") or "",
+                                         base_url=payload.get("base_url") or "")
+                return self._json(200, self.ai_settings(cfg))
+            if path == "/api/ai/test":
+                try:
+                    msg = ai_mod.test_connection()
+                    return self._json(200, {"ok": True, "message": msg})
+                except ai_mod.AIError as e:
+                    return self._json(400, {"ok": False, "error": str(e)})
+            parts = path.strip("/").split("/")
+            if len(parts) == 4 and parts[1] == "scans" and parts[3] == "ai":
+                r = REGISTRY.get(parts[2])
+                if not r:
+                    return self._json(404, {"error": "scan not found"})
+                if r.status == "running":
+                    return self._json(409, {"error": "scan still running"})
+                if not len(r.findings):
+                    return self._json(400, {"error": "no findings to analyze"})
+                try:
+                    out = ai_mod.analyze_result(r.to_dict())
+                except ai_mod.AIError as e:
+                    return self._json(400, {"error": str(e)})
+                r.ai_summary = out["summary"]
+                r.ai_meta = {"provider": out["provider"], "label": out["label"],
+                             "model": out["model"]}
+                save_result(r)
+                return self._json(200, {"ai_summary": r.ai_summary, "ai_meta": r.ai_meta})
             return self._json(404, {"error": "not found"})
         except ValueError as e:
             return self._json(400, {"error": str(e)})
@@ -230,6 +266,27 @@ class Handler(BaseHTTPRequestHandler):
                 "started": r.started, "finished": r.finished,
                 "tls_grade": r.tls_grade, "modules": [m.to_dict() for m in r.modules],
                 "total": len(r.findings)}
+
+    @staticmethod
+    def ai_settings(cfg: dict | None = None) -> dict:
+        cfg = cfg or ai_mod.load_config()
+        resolved = ""
+        try:
+            eff = ai_mod.resolve_ai(cfg)
+            resolved = f"{eff['label']} · {eff['model']}"
+        except ai_mod.AIError:
+            pass
+        return {
+            "provider": cfg.get("provider", ""),
+            "model": cfg.get("model", ""),
+            "base_url": cfg.get("base_url", ""),
+            "key_masked": ai_mod.mask_key(cfg.get("api_key", "")),
+            "key_set": bool(cfg.get("api_key")),
+            "resolved": resolved,
+            "providers": [{"id": pid, "label": m["label"], "default_model": m["default_model"],
+                           "key_url": m["key_url"], "api": m["api"]}
+                          for pid, m in ai_mod.PROVIDERS.items()],
+        }
 
     @staticmethod
     def dashboard() -> dict:

@@ -139,6 +139,7 @@ Views.scan = async (el) => {
         <label class="on"><input type="checkbox" checked data-opt="osv_online"> Query OSV.dev for dependency CVEs</label>
         <label class="on"><input type="checkbox" checked data-opt="web_probe_injection"> Light injection probes (non-destructive)</label>
         <label><input type="checkbox" data-opt="ports_all"> Wider port range (1–1024)</label>
+        <label><input type="checkbox" data-opt="ai"> ✨ AI executive analysis after scan</label>
       </div>
       <label class="f">Label (optional)</label>
       <input type="text" id="scan-label" placeholder="e.g. pre-release audit of payments-api">
@@ -188,7 +189,8 @@ Views.scan = async (el) => {
     const body = { targets, label:$("#scan-label").value.trim(),
       osv_online: $('[data-opt="osv_online"]').checked,
       web_probe_injection: $('[data-opt="web_probe_injection"]').checked,
-      ports: $('[data-opt="ports_all"]').checked ? "1-1024" : "top100" };
+      ports: $('[data-opt="ports_all"]').checked ? "1-1024" : "top100",
+      ai: $('[data-opt="ai"]').checked };
     try{
       const {scan_id} = await API.post("/api/scans", body);
       location.hash = `#/scan/${scan_id}`;
@@ -211,6 +213,19 @@ Views.scanDetail = async (el, id) => {
     const counts = r.counts||{};
     const rows = (r.findings||[]).slice().sort((a,b)=>b.score-a.score).slice(0,25).map(fRow).join("");
     const running = r.status==="running";
+    const aiCard = r.ai_summary
+      ? `<div class="card" style="margin-top:16px;border-left:3px solid var(--accent)">
+           <h3>AI executive analysis — ${esc((r.ai_meta||{}).label||"")} · ${esc((r.ai_meta||{}).model||"")} <span class="muted" style="text-transform:none;letter-spacing:0">(advisory)</span></h3>
+           <div style="font-size:13.5px">${mdToHtml(r.ai_summary)}</div>
+         </div>`
+      : `<div class="card" style="margin-top:16px">
+           <h3>AI executive analysis</h3>
+           <div style="display:flex;gap:12px;align-items:center">
+             <button class="btn primary" id="ai-run" ${running?"disabled":""}>✨ Generate AI analysis</button>
+             <span class="muted" style="font-size:13px">Uses the provider configured under AI Settings — adds summary, priorities and quick wins to reports.</span>
+             <span id="ai-run-msg" class="muted"></span>
+           </div>
+         </div>`;
     el.innerHTML = `
     <div class="grid g4">
       <div class="card"><h3>Target</h3><div class="mono" style="font-size:13px">${esc(t)}</div>
@@ -231,6 +246,7 @@ Views.scanDetail = async (el, id) => {
           <button class="btn danger" id="del-scan">✕ Delete scan</button>
         </div></div>
     </div>
+    ${aiCard}
     <div class="grid g23" style="margin-top:16px">
       <div class="card"><h3>Findings preview</h3>
         ${rows?`<table class="tbl"><tr><th></th><th>Finding</th><th>Location</th><th style="text-align:right">Score</th></tr>${rows}</table>`
@@ -239,6 +255,18 @@ Views.scanDetail = async (el, id) => {
         ${running?'<div class="progress-line"><span style="width:40%;animation:none" id="live-line"></span></div>':""}</div>
     </div>`;
     $("#del-scan").onclick = async () => { await API.del(`/api/scans/${r.scan_id}`); location.hash = "#/reports"; };
+    const aiBtn = $("#ai-run");
+    if (aiBtn) aiBtn.onclick = async () => {
+      const msg = $("#ai-run-msg");
+      aiBtn.disabled = true; msg.textContent = "analyzing with AI…"; msg.style.color = "";
+      try{
+        await API.post(`/api/scans/${r.scan_id}/ai`, {});
+        poll();   // re-draw with the summary
+      }catch(e){
+        msg.textContent = e.error || e.message; msg.style.color = "var(--critical)";
+        aiBtn.disabled = false;
+      }
+    };
   };
   const poll = async () => {
     const r = await API.get(`/api/scans/${id}`);
@@ -382,6 +410,97 @@ Views.mitre = async (el) => {
   });
 };
 
+/* ---------------- AI settings ---------------- */
+function mdToHtml(md){
+  // minimal, safe markdown: escape everything first, then style structure
+  let html = "";
+  let inList = false;
+  const inline = s => s
+    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+    .replace(/`([^`]+)`/g, "<span class='mono' style='background:#0a1327;padding:1px 5px;border-radius:5px'>$1</span>");
+  for (const raw of String(md).split(/\r?\n/)){
+    const s = esc(raw.trim());
+    const bullet = s.match(/^[-*]\s+(.*)$/);
+    const numbered = s.match(/^(\d+)[.)]\s+(.*)$/);
+    if (/^###\s/.test(s) || /^##\s/.test(s) || /^#\s/.test(s)){
+      if (inList){ html += "</ul>"; inList = false; }
+      const txt = s.replace(/^#+\s*/, "");
+      html += `<h3 style="margin:16px 0 6px;font-size:14px;color:var(--accent)">${inline(txt)}</h3>`;
+    } else if (bullet || numbered){
+      if (!inList){ html += "<ul style='margin:6px 0 6px 20px'>"; inList = true; }
+      html += `<li style="margin:3px 0">${inline((bullet||numbered)[2] || (bullet||numbered)[1])}</li>`;
+    } else if (!s){
+      if (inList){ html += "</ul>"; inList = false; }
+    } else {
+      if (inList){ html += "</ul>"; inList = false; }
+      html += `<p style="margin:8px 0">${inline(s)}</p>`;
+    }
+  }
+  if (inList) html += "</ul>";
+  return html;
+}
+
+Views.settings = async (el) => {
+  el.innerHTML = `<div class="empty"><div class="big-ic">⚙</div>Loading AI settings…</div>`;
+  const s = await API.get("/api/settings");
+  const sel = (s.providers||[]).map(p =>
+    `<option value="${esc(p.id)}" ${p.id===s.provider?"selected":""}>${esc(p.label)}${p.default_model?` — ${esc(p.default_model)}`:""}</option>`).join("");
+  el.innerHTML = `
+  <div class="grid g2">
+    <div class="card">
+      <h3>AI provider</h3>
+      <p class="muted" style="font-size:13px;margin-bottom:6px">Bring your own API key — the key is stored locally in
+        <span class="mono">aegisscan-data/config.json</span> and never leaves your machine except to call your chosen provider.</p>
+      <label class="f">Provider</label>
+      <select id="ai-provider">${sel}</select>
+      <label class="f">API key ${s.key_set?`<span class="chip pass">saved ${esc(s.key_masked)}</span>`:""}</label>
+      <input type="text" id="ai-key" placeholder="paste API key (leave empty to keep the saved one)" autocomplete="off">
+      <label class="f">Model (optional — provider default used if empty)</label>
+      <input type="text" id="ai-model" value="${esc(s.model)}" placeholder="e.g. gpt-4o-mini / claude-sonnet-4-5 / glm-4.6">
+      <label class="f">Base URL (only for the 'custom' provider)</label>
+      <input type="text" id="ai-baseurl" value="${esc(s.base_url)}" placeholder="http://localhost:11434/v1">
+      <div style="display:flex;gap:10px;margin-top:18px;align-items:center">
+        <button class="btn primary" id="ai-save">💾 Save settings</button>
+        <button class="btn" id="ai-test">🔌 Test connection</button>
+        <span id="ai-msg" class="muted"></span>
+      </div>
+      <div id="ai-status" style="margin-top:10px">${s.resolved?`<span class="chip pass">configured: ${esc(s.resolved)}</span>`:`<span class="chip info">not configured</span>`}</div>
+    </div>
+    <div class="card">
+      <h3>What the AI does</h3>
+      <p class="muted" style="font-size:13.5px">After a scan (or on demand from any scan page) the configured model receives a compact,
+        <b style="color:var(--text)">redacted</b> digest of your findings and returns an
+        <b style="color:var(--text)">executive summary, top-priority fixes, quick wins and next steps</b> — embedded into reports and the dashboard.</p>
+      <h3 style="margin-top:18px">Available providers</h3>
+      <table class="tbl">
+        ${(s.providers||[]).map(p=>`<tr><td><b>${esc(p.id)}</b></td><td class="muted">${esc(p.label)}</td>
+          <td class="mono">${esc(p.default_model||"—")}</td>
+          <td>${p.key_url?`<a href="${esc(p.key_url)}" target="_blank" rel="noopener">get key ↗</a>`:'<span class="dim">own endpoint</span>'}</td></tr>`).join("")}
+      </table>
+    </div>
+  </div>`;
+  $("#ai-save").onclick = async () => {
+    const msg = $("#ai-msg"); msg.textContent = "saving…"; msg.style.color = "";
+    try{
+      await API.post("/api/settings", {
+        provider: $("#ai-provider").value,
+        api_key: $("#ai-key").value.trim(),
+        model: $("#ai-model").value.trim(),
+        base_url: $("#ai-baseurl").value.trim()
+      });
+      msg.textContent = "saved ✓"; msg.style.color = "var(--accent2)";
+      Views.settings(el);
+    }catch(e){ msg.textContent = e.message; msg.style.color = "var(--critical)"; }
+  };
+  $("#ai-test").onclick = async () => {
+    const msg = $("#ai-msg"); msg.textContent = "testing…"; msg.style.color = "";
+    try{
+      const r = await API.post("/api/ai/test", {});
+      msg.textContent = r.message; msg.style.color = "var(--accent2)";
+    }catch(e){ msg.textContent = e.error || e.message; msg.style.color = "var(--critical)"; }
+  };
+};
+
 /* ---------------- reports ---------------- */
 Views.reports = async (el) => {
   el.innerHTML = `<div class="empty"><div class="big-ic">▤</div>Loading scans…</div>`;
@@ -413,7 +532,7 @@ Views.reports = async (el) => {
 
 /* ============================================================ router */
 const TITLES = {"/":"Dashboard","/scan":"New Scan","/findings":"Findings Explorer",
-  "/mitre":"MITRE ATT&CK Coverage","/reports":"Reports & Exports"};
+  "/mitre":"MITRE ATT&CK Coverage","/reports":"Reports & Exports","/settings":"AI Settings"};
 let CURRENT_SCAN = null;
 
 async function route(){
@@ -448,5 +567,6 @@ function updateNavBadge(n){
 
 (async function init(){
   try{ const m = await API.get("/api/meta"); $("#ver").textContent = `${m.product} v${m.version}`; }catch(e){}
+  refreshBadge();
   await route();
 })();

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aegisscan"
-version = "1.0.0"
+version = "1.1.0"
 description = "AegisScan — unified multi-layer security scanner (SAST, SCA, secrets, web/DAST, TLS audit, ports, GitHub) with MITRE ATT&CK mapping and professional reporting"
 readme = "README.md"
 requires-python = ">=3.9"

@@ -75,6 +75,7 @@ MODULE_LABELS = {
     "web": "Web Application (DAST)",
     "tls": "TLS / SSL Audit",
     "network": "Network / Ports",
+    "ai": "AI Analysis (LLM)",
 }
 
 
@@ -159,6 +160,8 @@ class ScanResult:
     tls_grade: str = ""               # overall SSL-Labs-style grade when TLS scanned
     tls_details: dict = field(default_factory=dict)
     github_meta: dict = field(default_factory=dict)
+    ai_summary: str = ""              # optional AI executive analysis (markdown)
+    ai_meta: dict = field(default_factory=dict)   # {"provider","label","model"}
     mitre_tactics: list = field(default_factory=list)
     risk_score: float = 0.0
     label: str = ""
@@ -202,6 +205,8 @@ class ScanResult:
             "tls_grade": self.tls_grade,
             "tls_details": self.tls_details,
             "github_meta": self.github_meta,
+            "ai_summary": self.ai_summary,
+            "ai_meta": self.ai_meta,
             "mitre_tactics": self.mitre_tactics,
             "risk_score": self.risk_score,
         }
@@ -221,6 +226,8 @@ class ScanResult:
             tls_grade=d.get("tls_grade", ""),
             tls_details=d.get("tls_details", {}),
             github_meta=d.get("github_meta", {}),
+            ai_summary=d.get("ai_summary", ""),
+            ai_meta=d.get("ai_meta", {}),
             risk_score=d.get("risk_score", 0.0),
             mitre_tactics=d.get("mitre_tactics", []),
         )
@@ -243,6 +250,7 @@ class ScanConfig:
     web_probe_injection: bool = True              # light, non-destructive injection probes
     web_max_pages: int = 25
     excludes: list = field(default_factory=list)  # path substrings to skip in code scans
+    ai: bool = False                              # run AI analysis after the scan
     label: str = ""
 
     def to_dict(self) -> dict:
@@ -254,5 +262,6 @@ class ScanConfig:
             "web_probe_injection": self.web_probe_injection,
             "web_max_pages": self.web_max_pages,
             "excludes": self.excludes,
+            "ai": self.ai,
             "label": self.label,
         }

@@ -19,17 +19,25 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import shutil
+import subprocess
 import sys
 import threading
+import urllib.request
 import uuid
 import webbrowser
 from datetime import datetime, timezone
 
 from . import __product__, __version__
+from .core import ai as ai_mod
 from .core.engine import ScanConfig, ScanEngine, ScanTarget
 from .core.models import ScanResult, Severity
 from .core.report import render
 from .core.utils import Ansi
+
+UPSTREAM_REPO = "ronnibp/aegisscan"
+UPSTREAM_RAW = f"https://raw.githubusercontent.com/{UPSTREAM_REPO}/main/pyproject.toml"
 
 DATA_DIR_NAME = "aegisscan-data"
 
@@ -94,6 +102,16 @@ def _progress_printer(module_label="scan"):
     return cb
 
 
+def _print_ai_summary(result):
+    if not result.ai_summary:
+        return
+    meta = result.ai_meta or {}
+    print(f"\n{Ansi.bold('AI executive analysis')} "
+          f"{Ansi.dim('— ' + meta.get('label', '') + ' · ' + meta.get('model', '') + ' (advisory)')}\n")
+    for ln in result.ai_summary.splitlines():
+        print(Ansi.gray("  " + ln))
+
+
 def _finish_and_report(result, out: str, formats, fail_on: str) -> int:
     if isinstance(formats, str):
         formats = [f.strip().lower() for f in formats.split(",") if f.strip()]
@@ -146,6 +164,7 @@ def _build_config(args) -> ScanConfig:
     cfg.web_max_pages = getattr(args, "max_pages", 25) or 25
     cfg.web_probe_injection = not getattr(args, "no_injection", False)
     cfg.excludes = list(getattr(args, "exclude", None) or [])
+    cfg.ai = bool(getattr(args, "ai", False))
     return cfg
 
 
@@ -155,6 +174,13 @@ def cmd_scan(args) -> int:
     if not cfg.targets:
         print(Ansi.red("No target given. Use --repo, --github, --url, --host or --https."))
         return 2
+    if cfg.ai:
+        try:
+            eff = ai_mod.resolve_ai()
+            print(Ansi.magenta(f"  AI analysis enabled: {eff['label']} · {eff['model']}"))
+        except ai_mod.AIError as e:
+            print(Ansi.yellow(f"  AI disabled: {e}"))
+            cfg.ai = False
     engine = ScanEngine(cfg)
     result = engine.run()
     print(f"\n{Ansi.bold(__product__ + ' scan')} {Ansi.dim('— ' + ', '.join(t.get('value', '') for t in result.targets))}")
@@ -166,6 +192,7 @@ def cmd_scan(args) -> int:
     if result.tls_grade:
         print(f"\n  TLS grade: {Ansi.bold(result.tls_grade)}")
     _print_findings(result, verbose=args.verbose, limit=args.top)
+    _print_ai_summary(result)
     return _finish_and_report(result, args.out, args.formats, args.fail_on)
 
 
@@ -261,10 +288,202 @@ def cmd_demo(args) -> int:
         return 2
     print(f"{Ansi.bold('Running demo scan')} {Ansi.dim('— bundled intentionally vulnerable application')}")
     cfg = ScanConfig(targets=[ScanTarget("repo", example)], label="Demo vulnerable app")
+    cfg.ai = bool(getattr(args, "ai", False))
+    if cfg.ai:
+        try:
+            eff = ai_mod.resolve_ai()
+            print(Ansi.magenta(f"  AI analysis enabled: {eff['label']} · {eff['model']}"))
+        except ai_mod.AIError as e:
+            print(Ansi.yellow(f"  AI disabled: {e}"))
+            cfg.ai = False
     engine = ScanEngine(cfg)
     result = engine.run()
     _print_findings(result, verbose=True, limit=args.top)
+    _print_ai_summary(result)
     return _finish_and_report(result, args.out, args.formats, args.fail_on)
+
+
+# --------------------------------------------------------------------------- AI commands
+def cmd_ai(args) -> int:
+    if args.ai_cmd == "setup":
+        provider = args.provider or ""
+        if not provider:
+            print(Ansi.bold("Supported AI providers:") + "\n" + Ansi.gray(ai_mod.provider_help()))
+            print(f"\nRun: {Ansi.cyan('aegisscan ai setup --provider <id> --api-key <KEY> [--model M] [--base-url URL]')}")
+            return 0
+        cfg = ai_mod.save_config(provider=provider, api_key=args.api_key or "",
+                                 model=args.model or "", base_url=args.base_url or "")
+        print(Ansi.green(f"✔ AI provider saved: {ai_mod.PROVIDERS[cfg['provider']]['label']}"))
+        print(Ansi.gray(f"  model: {cfg['model'] or ai_mod.PROVIDERS[cfg['provider']]['default_model'] or '(must set)'}"))
+        print(Ansi.gray(f"  key:   {ai_mod.mask_key(cfg['api_key']) or '(from environment)'}  "
+                        f"stored in {ai_mod.config_path()}"))
+        print(Ansi.dim("  test it: aegisscan ai test"))
+        return 0
+
+    if args.ai_cmd == "show":
+        cfg = ai_mod.load_config()
+        if not cfg.get("provider"):
+            print("No AI provider configured. Run 'aegisscan ai setup' (no args) to list providers.")
+            return 0
+        print(f"provider: {Ansi.bold(cfg['provider'])} ({ai_mod.PROVIDERS.get(cfg['provider'], {}).get('label', '?')})")
+        print(f"model:    {cfg['model'] or ai_mod.PROVIDERS[cfg['provider']]['default_model']}")
+        env_key = ""
+        for env_name in ai_mod.PROVIDERS[cfg["provider"]]["env"]:
+            if os.environ.get(env_name):
+                env_key = f"{env_name} (environment)"
+                break
+        print(f"api key:  {ai_mod.mask_key(cfg['api_key']) or env_key or '(not set)'}")
+        if cfg.get("base_url"):
+            print(f"base url: {cfg['base_url']}")
+        return 0
+
+    if args.ai_cmd == "test":
+        try:
+            print(Ansi.green("✔ " + ai_mod.test_connection()))
+            return 0
+        except ai_mod.AIError as e:
+            print(Ansi.red(f"✖ {e}"))
+            return 1
+
+    if args.ai_cmd == "explain":
+        path = args.scan
+        if os.path.isdir(path):
+            candidate = os.path.join(path, "scans")
+        elif path.endswith(".json") and os.path.exists(path):
+            candidate = path
+        else:
+            candidate = os.path.join(data_dir(), "scans", f"{path}.json")
+        if os.path.isdir(candidate):
+            files = [os.path.join(candidate, f) for f in sorted(os.listdir(candidate)) if f.endswith(".json")]
+            if not files:
+                print(Ansi.red("No saved scans found."))
+                return 2
+            path = files[-1]
+        elif not os.path.exists(candidate):
+            print(Ansi.red(f"Scan not found: {path}"))
+            return 2
+        else:
+            path = candidate
+        with open(path, "r", encoding="utf-8") as fh:
+            result = ScanResult.from_dict(json.load(fh))
+        print(Ansi.dim(f"Analyzing {result.scan_id} ({len(result.findings)} findings) with AI…\n"))
+        try:
+            out = ai_mod.analyze_result(result.to_dict())
+        except ai_mod.AIError as e:
+            print(Ansi.red(f"✖ {e}"))
+            return 1
+        result.ai_summary = out["summary"]
+        result.ai_meta = {"provider": out["provider"], "label": out["label"], "model": out["model"]}
+        save_result(result)          # persist so reports/UI include it
+        print(Ansi.bold(f"AI analysis ({out['label']} · {out['model']}) — advisory, verify before acting:\n"))
+        print(result.ai_summary)
+        print(Ansi.cyan(f"\n  saved to scan {result.scan_id}; reports now include it "
+                        f"(aegisscan report --input {os.path.join(data_dir(), 'scans', result.scan_id + '.json')} --format html)"))
+        return 0
+    return 2
+
+
+# --------------------------------------------------------------------------- update
+def _latest_upstream_version(timeout: int = 15) -> str:
+    req = urllib.request.Request(UPSTREAM_RAW, headers={"User-Agent": f"AegisScan/{__version__}"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        text = resp.read().decode("utf-8", "replace")
+    m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.M)
+    if not m:
+        raise RuntimeError("could not parse upstream version")
+    return m.group(1)
+
+
+def _vkey(v: str) -> tuple:
+    return tuple(int(p) for p in re.findall(r"\d+", v)[:3])
+
+
+def _install_kind() -> str:
+    """Return 'git' (source checkout), 'pip' (site-packages), or 'source'."""
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if os.path.isdir(os.path.join(here, ".git")):
+        return "git"
+    try:
+        out = subprocess.run([sys.executable, "-m", "pip", "show", "aegisscan"],
+                             capture_output=True, text=True, timeout=60)
+        if "Name: aegisscan" in out.stdout and "Location: " + here not in out.stdout:
+            return "pip"
+    except Exception:
+        pass
+    return "source"
+
+
+def cmd_update(args) -> int:
+    print(f"{Ansi.bold(__product__)} update")
+    print(f"  installed version: {Ansi.bold(__version__)}")
+
+    latest = ""
+    try:
+        latest = _latest_upstream_version()
+        print(f"  latest version:    {Ansi.bold(latest)}")
+    except Exception as e:
+        print(Ansi.yellow(f"  could not check upstream version: {e}"))
+    if args.check:
+        return 0
+    if latest and _vkey(latest) <= _vkey(__version__):
+        print(Ansi.green("\n✔ AegisScan is up to date."))
+        return 0
+
+    kind = _install_kind()
+    if kind == "git":
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        print(Ansi.cyan("\n  updating source checkout (git)…"))
+        for cmd in (["git", "fetch", "origin"], ["git", "pull", "--ff-only", "origin", "main"]):
+            r = subprocess.run(cmd, cwd=repo_root)
+            if r.returncode != 0:
+                print(Ansi.red("  git update failed — resolve locally and retry."))
+                return 1
+        print(Ansi.green("✔ source updated. Restart any running dashboard to pick it up."))
+        return 0
+
+    print(Ansi.cyan(f"\n  updating via pip ({kind or 'pip'} install)…"))
+    targets = ["--upgrade", f"git+https://github.com/{UPSTREAM_REPO}.git"]
+    r = subprocess.run([sys.executable, "-m", "pip", "install", *targets])
+    if r.returncode != 0:
+        print(Ansi.red("  pip update failed."))
+        return 1
+    print(Ansi.green("✔ AegisScan updated. Restart any running dashboard to pick it up."))
+    return 0
+
+
+# --------------------------------------------------------------------------- uninstall
+def cmd_uninstall(args) -> int:
+    kind = _install_kind()
+    data_path = os.environ.get("AEGISSCAN_DATA") or os.path.join(os.getcwd(), ai_mod.DATA_DIR_NAME)
+    print(f"{Ansi.bold(__product__)} uninstall")
+    print(f"  install type: {kind}")
+    print(f"  data dir:     {data_path}")
+
+    if args.purge_data:
+        if not args.yes:
+            print(Ansi.yellow("\n  --purge-data will DELETE all saved scans, reports and AI config."))
+            print(Ansi.yellow(f"  Re-run with --yes to confirm deletion of: {data_path}"))
+            return 2
+        if os.path.isdir(data_path):
+            shutil.rmtree(data_path, ignore_errors=True)
+            print(Ansi.green(f"✔ removed data directory {data_path}"))
+        else:
+            print(Ansi.dim(f"  data directory not found: {data_path}"))
+
+    if kind == "pip":
+        print(Ansi.cyan("\n  running: pip uninstall aegisscan"))
+        r = subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "aegisscan"])
+        if r.returncode == 0:
+            print(Ansi.green("✔ AegisScan package uninstalled."))
+        return r.returncode
+
+    print(Ansi.yellow("\n  This copy runs from a source checkout — there is nothing pip-managed to remove."))
+    print("  To remove it completely:")
+    print(f"    1. delete this folder (or: {Ansi.cyan('aegisscan uninstall --purge-data --yes')} to also wipe data)")
+    print("    2. remove any PATH/alias entries you created")
+    print(f"  Data is kept unless you pass {Ansi.cyan('--purge-data --yes')}.")
+    return 0
+
 
 
 # --------------------------------------------------------------------------- parser
@@ -299,6 +518,8 @@ def build_parser() -> argparse.ArgumentParser:
     scan_p.add_argument("--exclude", action="append", default=[],
                         help="skip files whose relative path contains this substring (repeatable)")
     scan_p.add_argument("--label", default="", help="label for this scan")
+    scan_p.add_argument("--ai", action="store_true",
+                        help="add an AI executive analysis (requires 'aegisscan ai setup')")
     common(scan_p)
     scan_p.set_defaults(func=cmd_scan)
 
@@ -342,8 +563,39 @@ def build_parser() -> argparse.ArgumentParser:
     ui_p.set_defaults(func=cmd_ui)
 
     demo_p = sub.add_parser("demo", help="scan the bundled vulnerable demo app")
+    demo_p.add_argument("--ai", action="store_true", help="add an AI executive analysis")
     common(demo_p)
     demo_p.set_defaults(func=cmd_demo)
+
+    ai_p = sub.add_parser("ai", help="configure and use AI analysis (OpenAI, Anthropic, Gemini, GLM/Z.ai, …)")
+    ai_sub = ai_p.add_subparsers(dest="ai_cmd", required=True)
+
+    setup_p = ai_sub.add_parser("setup", help="configure provider, API key and model (no args = list providers)")
+    setup_p.add_argument("--provider", default="", help=f"one of: {', '.join(ai_mod.PROVIDERS)}")
+    setup_p.add_argument("--api-key", default="", help="API key (stored locally in aegisscan-data/config.json)")
+    setup_p.add_argument("--model", default="", help="model id (default depends on provider)")
+    setup_p.add_argument("--base-url", default="", help="base URL for the 'custom' provider")
+    setup_p.set_defaults(func=cmd_ai)
+
+    show_p = ai_sub.add_parser("show", help="show current AI configuration (key masked)")
+    show_p.set_defaults(func=cmd_ai)
+
+    test_p = ai_sub.add_parser("test", help="verify the API key with a minimal round-trip")
+    test_p.set_defaults(func=cmd_ai)
+
+    explain_p = ai_sub.add_parser("explain", help="run AI analysis on a saved scan and update its reports")
+    explain_p.add_argument("scan", help="scan id, path to scan JSON, or directory of scans")
+    explain_p.set_defaults(func=cmd_ai)
+
+    upd_p = sub.add_parser("update", help="update AegisScan to the latest version (git or pip)")
+    upd_p.add_argument("--check", action="store_true", help="only check the latest version, do not update")
+    upd_p.set_defaults(func=cmd_update)
+
+    uni_p = sub.add_parser("uninstall", help="remove AegisScan (package and/or data)")
+    uni_p.add_argument("--purge-data", action="store_true",
+                       help="also delete saved scans, reports and AI config (aegisscan-data/)")
+    uni_p.add_argument("--yes", action="store_true", help="confirm destructive actions (required with --purge-data)")
+    uni_p.set_defaults(func=cmd_uninstall)
     return p
 
 

@@ -170,7 +170,62 @@ SARIF to Code Scanning) ships at `.github/workflows/aegisscan.yml`.
 
 ---
 
-## 6. Troubleshooting
+## 6. AI analysis (bring your own API key)
+
+AegisScan can augment any scan with an LLM-written executive analysis —
+summary, top-priority fixes, quick wins and next steps — shown in the
+dashboard and embedded in HTML/Markdown reports.
+
+### 6.1 Configure a provider
+
+```bash
+python -m aegisscan ai setup              # list all providers + where to get keys
+python -m aegisscan ai setup --provider openai    --api-key sk-...
+python -m aegisscan ai setup --provider anthropic --api-key sk-ant-...
+python -m aegisscan ai setup --provider google    --api-key AIza...
+python -m aegisscan ai setup --provider zai       --api-key ...     # Z.ai / GLM
+python -m aegisscan ai setup --provider zhipu     --api-key ...     # GLM mainland
+python -m aegisscan ai setup --provider mistral|groq|deepseek|xai|cohere|openrouter --api-key ...
+python -m aegisscan ai setup --provider custom --base-url http://localhost:11434/v1 --model llama3
+python -m aegisscan ai show      # current config (key masked)
+python -m aegisscan ai test      # minimal round-trip
+```
+
+Alternatively use the dashboard's **AI Settings** page (provider dropdown, key,
+model, test button). Keys are stored in `aegisscan-data/config.json` (local
+only) or read from environment variables: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
+`GEMINI_API_KEY`/`GOOGLE_API_KEY`, `ZAI_API_KEY`, `ZHIPU_API_KEY`,
+`MISTRAL_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `XAI_API_KEY`,
+`COHERE_API_KEY`, `OPENROUTER_API_KEY`.
+
+### 6.2 Use it
+
+```bash
+python -m aegisscan demo --ai                       # during any scan (--scan too: scan --repo . --ai)
+python -m aegisscan ai explain <scan-id|file.json>  # analyze a saved scan afterwards
+```
+
+In the dashboard: set up AI under **AI Settings**, then open any scan and click
+**✨ Generate AI analysis** — or tick *AI executive analysis after scan* in the
+New Scan form.
+
+Only finding metadata (title, severity, location, ATT&CK ids) is sent — never
+file contents or secret values. AI output is advisory and labelled as such.
+
+## 7. Updating & uninstalling
+
+```bash
+python -m aegisscan update            # compare with upstream and self-update
+python -m aegisscan update --check    # versions only
+python -m aegisscan uninstall         # remove the pip package (keeps data)
+python -m aegisscan uninstall --purge-data --yes    # also delete aegisscan-data/
+```
+
+`update` checks the latest version on GitHub, then runs `git pull --ff-only`
+(source checkouts) or `pip install --upgrade` (pip installs). Your scan data
+is never touched by updates.
+
+## 8. Troubleshooting
 
 | Symptom | Fix |
 |---|---|
@@ -180,7 +235,7 @@ SARIF to Code Scanning) ships at `.github/workflows/aegisscan.yml`.
 | Web scan missed a page | Increase `--max-pages` (crawler only follows same-host links from the entry page). |
 | GitHub 403/rate limit | Set `GITHUB_TOKEN`. |
 
-## 7. Ethics
+## 9. Ethics
 
 Only scan assets you own or are authorized to test in writing. Web probes are
 non-destructive but still generate requests — respect scope and rate limits.

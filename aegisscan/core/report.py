@@ -173,6 +173,57 @@ def _finding_card(f: Finding, idx: int) -> str:
 </div>"""
 
 
+def _md_to_html(md: str) -> str:
+    """Minimal, safe Markdown renderer (headings, bold, italics, code, lists).
+    Everything is HTML-escaped first, so AI output can never inject markup."""
+    import re as _re
+    out = []
+    in_list = False
+    for raw in md.splitlines():
+        line = esc(raw.rstrip())
+        s = line.strip()
+        bullet = _re.match(r"^[-*]\s+(.*)$", s)
+        numbered = _re.match(r"^(\d+)[.)]\s+(.*)$", s)
+        if s.startswith("### "):
+            if in_list:
+                out.append("</ul>")
+                in_list = False
+            out.append(f"<h4 style='margin:14px 0 6px'>{s[4:]}</h4>")
+        elif s.startswith("## "):
+            if in_list:
+                out.append("</ul>")
+                in_list = False
+            out.append(f"<h3 style='margin:18px 0 8px;font-size:15px'>{s[3:]}</h3>")
+        elif s.startswith("# "):
+            if in_list:
+                out.append("</ul>")
+                in_list = False
+            out.append(f"<h3 style='margin:18px 0 8px;font-size:16px'>{s[2:]}</h3>")
+        elif bullet or numbered:
+            if not in_list:
+                out.append("<ul style='margin:6px 0 6px 20px'>")
+                in_list = True
+            text = (bullet or numbered).group(2 if numbered else 1)
+            out.append(f"<li style='margin:3px 0'>{text}</li>")
+        elif not s:
+            if in_list:
+                out.append("</ul>")
+                in_list = False
+        else:
+            if in_list:
+                out.append("</ul>")
+                in_list = False
+            out.append(f"<p style='margin:8px 0'>{s}</p>")
+    if in_list:
+        out.append("</ul>")
+    html = "".join(out)
+    # inline: **bold**, *italics*, `code`
+    html = _re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", html)
+    html = _re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<i>\1</i>", html)
+    html = _re.sub(r"`([^`]+)`", r"<code style='background:#0a1327;padding:1px 5px;border-radius:5px;font-size:12.5px'>\1</code>", html)
+    return html
+
+
 def render_html(result: ScanResult) -> str:
     counts = result.counts
     tls = result.tls_details or {}
@@ -281,6 +332,18 @@ def render_html(result: ScanResult) -> str:
             '<stop offset="0" stop-color="#22d3ee"/><stop offset="1" stop-color="#34d399"/></linearGradient></defs>'
             '<path d="M9 12l2 2 4-4" stroke="#0b1220" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>')
 
+    ai_html = ""
+    if result.ai_summary:
+        meta = result.ai_meta or {}
+        body = _md_to_html(result.ai_summary)
+        ai_html = f"""
+<div class="section">
+  <h2>AI Executive Analysis</h2>
+  <p class="lead">Generated with {esc(meta.get('label', meta.get('provider', 'an LLM')))} ({esc(meta.get('model', ''))}).
+  AI output is advisory — verify before acting.</p>
+  <div class="card" style="border-left:4px solid var(--accent, #22d3ee)">{body}</div>
+</div>"""
+
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -310,6 +373,8 @@ def render_html(result: ScanResult) -> str:
   The prioritized remediation roadmap below lists what to fix first; every finding includes its MITRE ATT&CK mapping and a concrete fix.</p>
   <div class="grid g4">{stat_cards}</div>
 </div>
+
+{ai_html}
 
 {f'<div class="section"><h2>TLS / SSL Audit</h2><p class="lead">SSL-Labs-style deep assessment of encryption posture.</p>{tls_html}</div>' if tls_html else ''}
 
@@ -356,6 +421,9 @@ def render_markdown(result: ScanResult) -> str:
     ]
     if result.tls_grade:
         lines.append(f"- **TLS grade:** {result.tls_grade}")
+    if result.ai_summary:
+        meta = result.ai_meta or {}
+        lines += [f"- **AI analysis:** {meta.get('label', meta.get('provider', 'LLM'))} ({meta.get('model', '')})"]
     lines += [
         "",
         "## Summary",
@@ -367,6 +435,17 @@ def render_markdown(result: ScanResult) -> str:
         f"| Low | {counts['low']} |",
         f"| Info | {counts['info']} |",
         "",
+    ]
+    if result.ai_summary:
+        meta = result.ai_meta or {}
+        lines += ["## AI Executive Analysis",
+                  "",
+                  f"> Generated with {meta.get('label', meta.get('provider', 'LLM'))} "
+                  f"({meta.get('model', '')}) — advisory only, verify before acting.",
+                  "",
+                  result.ai_summary,
+                  ""]
+    lines += [
         "## MITRE ATT&CK mapping",
         "",
     ]

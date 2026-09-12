@@ -79,10 +79,31 @@ class ScanEngine:
                     st.detail = str(e)
         finally:
             self._finalize()
+            if self.config.ai and self.result.status in ("completed", "partial"):
+                self._run_ai(status_cb)
             for path in self._cleanup:
                 shutil.rmtree(path, ignore_errors=True)
         status_cb(self.result)
         return self.result
+
+    def _run_ai(self, status_cb) -> None:
+        """Best-effort AI executive analysis; never breaks the scan result."""
+        from . import ai as ai_mod
+        st = ModuleStatus(name="ai", status="running")
+        self.result.modules.append(st)
+        status_cb(self.result)
+        t0 = time.time()
+        try:
+            out = ai_mod.analyze_result(self.result.to_dict())
+            self.result.ai_summary = out["summary"]
+            self.result.ai_meta = {"provider": out["provider"], "label": out["label"],
+                                   "model": out["model"]}
+            st.status = "done"
+            st.detail = f"{out.get('label', 'AI')} · {out.get('model', '')}"
+        except Exception as e:
+            st.status = "error"
+            st.detail = str(e)[:200]
+        st.duration = round(time.time() - t0, 2)
 
     # ------------------------------------------------------------------
     def _run_module(self, mod: str, target: ScanTarget, st: ModuleStatus) -> int:
