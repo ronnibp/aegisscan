@@ -9,6 +9,7 @@ import http.server
 import os
 import ssl
 import threading
+import urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -27,7 +28,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?")[0]
-        if path == "/.env":
+        if path == "/redirect":
+            # vulnerable open redirect for scanner testing
+            to = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("to", [""])[0]
+            self.send_response(302)
+            self.send_header("Location", to)
+            self.end_headers()
+        elif path == "/.env":
             self.send_response(200)
             self.end_headers()
             self.wfile.write(ENV_FILE)

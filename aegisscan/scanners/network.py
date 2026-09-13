@@ -14,6 +14,8 @@ TOP_100_PORTS = [
     3389, 3690, 4444, 5000, 5432, 5555, 5601, 5900, 5984, 6379, 6443, 6660,
     6667, 8000, 8008, 8009, 8080, 8081, 8443, 8888, 9000, 9090, 9200, 9300,
     11211, 27017, 27018, 28017, 50000, 50070, 61616,
+    2379, 6066, 7077, 8086, 8088, 8089, 8161, 8500, 9042, 9090,
+    10250, 10255, 15672, 5050, 2375, 2376,
 ]
 
 SERVICE_NAMES = {
@@ -31,6 +33,10 @@ SERVICE_NAMES = {
     9300: "elasticsearch-clusters", 11211: "memcached", 27017: "mongodb",
     27018: "mongodb-shard", 28017: "mongodb-web", 50000: "sap", 50070: "hadoop-namenode",
     61616: "activemq",
+    2379: "etcd", 6066: "spark-rest", 7077: "spark-cluster", 8086: "influxdb",
+    8088: "hadoop-yarn", 8089: "splunk-mgmt", 8161: "activemq-console", 8500: "consul",
+    9042: "cassandra", 9090: "prometheus", 10250: "kubelet", 10255: "kubelet-read-only",
+    15672: "rabbitmq-mgmt", 5050: "mesos",
 }
 
 # (ports, title, severity, description, remediation, mitre, cwe)
@@ -99,6 +105,58 @@ RISKY_SERVICES = [
      "A service is listening on a default exploitation/debug port; verify this is intentional.",
      "Identify and close the listener; firewall debug ports.",
      ["T1190"], "CWE-284"),
+    ((2379,), "etcd exposed", Severity.CRITICAL,
+     "Unauthenticated etcd exposes the entire key-value store — including Kubernetes cluster secrets, RBAC and pod definitions — effectively granting cluster takeover.",
+     "Enable client certificate authentication, bind to internal interfaces and firewall 2379 from untrusted networks.",
+     ["T1190", "T1552"], "CWE-306"),
+    ((10250,), "Kubernetes kubelet API exposed", Severity.HIGH,
+     "The kubelet read/write API allows executing commands in containers and reading secrets when anonymous auth is on.",
+     "Require webhook/authn authorization, restrict --anonymous-auth=false, allow only control-plane CIDRs.",
+     ["T1190", "T1210"], "CWE-306"),
+    ((10255,), "Kubernetes kubelet read-only port exposed", Severity.MEDIUM,
+     "The read-only kubelet port leaks pod specs, environment variables (often secrets) and cluster topology.",
+     "Disable the read-only port (--read-only-port=0) and restrict network access.",
+     ["T1592", "T1552"], "CWE-200"),
+    ((8088,), "Hadoop YARN ResourceManager exposed", Severity.CRITICAL,
+     "Unauthenticated YARN allows arbitrary container submission — remote code execution on cluster nodes.",
+     "Enable Kerberos authentication and restrict 8088 to an internal management network.",
+     ["T1190", "T1059"], "CWE-306"),
+    ((6066,), "Spark standalone REST submit port exposed", Severity.HIGH,
+     "The Spark REST submission endpoint accepts unauthenticated application jars — RCE on the cluster.",
+     "Disable the REST server or require authentication/ACLs; firewall 6066.",
+     ["T1190", "T1059"], "CWE-306"),
+    ((15672,), "RabbitMQ management console exposed", Severity.MEDIUM,
+     "The management UI often runs default (guest/guest) or weak credentials, giving queue/message access.",
+     "Remove default accounts, enforce strong passwords, bind the console internally.",
+     ["T1078"], "CWE-798"),
+    ((8161,), "ActiveMQ web console exposed", Severity.MEDIUM,
+     "The console can deploy brokers/apps; older ActiveMQ has unauthenticated RCE CVEs (e.g. CVE-2016-3088).",
+     "Restrict console access to admin networks and upgrade ActiveMQ.",
+     ["T1190"], "CWE-306"),
+    ((9042,), "Cassandra CQL native port exposed", Severity.MEDIUM,
+     "Exposed Cassandra without authentication/encryption enables full data access and tampering.",
+     "Enable PasswordAuthenticator + client TLS; bind internally.",
+     ["T1190", "T1005"], "CWE-306"),
+    ((8086,), "InfluxDB exposed", Severity.MEDIUM,
+     "Multiple InfluxDB versions had authentication-bypass CVEs; data is readable without valid creds.",
+     "Upgrade, enable auth over TLS, restrict network access.",
+     ["T1190", "T1005"], "CWE-306"),
+    ((8500,), "Consul agent/API exposed", Severity.MEDIUM,
+     "Open Consul exposes the key-value store (often secrets/tokens) and can register services/scripts leading to RCE.",
+     "Enable gossip encryption + ACLs, bind to internal interfaces.",
+     ["T1190", "T1552"], "CWE-306"),
+    ((5050,), "Mesos master exposed", Severity.HIGH,
+     "Unauthenticated Mesos accepts framework registrations — arbitrary task execution on the cluster.",
+     "Enable authentication/authorization and restrict to management networks.",
+     ["T1190", "T1059"], "CWE-306"),
+    ((8089,), "Splunk management port exposed", Severity.MEDIUM,
+     "The splunkd management port allows configuration changes and scripted lookups when creds are weak/default.",
+     "Restrict 8089 to admin networks; enforce strong credentials and TLS.",
+     ["T1078"], "CWE-798"),
+    ((9090,), "Prometheus exposed", Severity.LOW,
+     "Prometheus is read-only but leaks metrics with infrastructure/secret-adjacent labels.",
+     "Bind internally or front with auth proxy.",
+     ["T1592"], "CWE-200"),
 ]
 
 
@@ -167,6 +225,17 @@ def scan(host: str, ports: str = "top100", timeout: float = 1.5, max_threads: in
                 evidence=f"TCP {o['port']} open" + (f", banner: {o['banner'][:120]}" if o["banner"] else ""),
                 remediation=fix, references=["https://www.cisecurity.org/insights/white-papers"],
                 mitre=list(mitre), cwe=cwe, tags=["network", "exposure"],
+            ))
+    for o in open_ports:
+        if o["port"] in (3000, 8080, 80, 443) and "grafana" in (o["banner"] or "").lower():
+            findings.append(Finding(
+                scanner="network", category="Exposed Service", title="Grafana exposed",
+                severity=Severity.MEDIUM, target=host, location=f"{host}:{o['port']} (grafana)",
+                description="Grafana dashboards often expose internal metrics and sometimes datasources with embedded credentials; default admin/admin is common.",
+                evidence=o["banner"][:120],
+                remediation="Change default credentials, enforce SSO/OAuth, and restrict access to internal networks.",
+                references=["https://grafana.com/docs/grafana/latest/setup-grafana/configure-security/"],
+                mitre=["T1078", "T1592"], cwe="CWE-798", tags=["network", "exposure"],
             ))
     if open_ports:
         findings.append(Finding(

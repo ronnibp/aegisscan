@@ -46,9 +46,19 @@ OFFLINE_DB = [
     ("npm", "node-fetch", "<2.6.7", Severity.HIGH, 7.5, "CVE-2022-0235"),
     ("npm", "minimist", "<1.2.6", Severity.CRITICAL, 9.8, "CVE-2020-7598"),
     ("Go", "golang.org/x/crypto", "<0.17.0", Severity.HIGH, 7.5, "CVE-2023-48795"),
+    ("Go", "golang.org/x/net", "<0.17.0", Severity.HIGH, 7.5, "CVE-2023-39325"),
     ("Maven", "org.apache.log4j:log4j-core", "<2.17.0", Severity.CRITICAL, 10.0, "CVE-2021-44228"),
     ("Maven", "commons-collections:commons-collections", "<3.2.2", Severity.CRITICAL, 9.8, "CVE-2015-6420"),
     ("Maven", "org.springframework:spring-web", "<5.3.18", Severity.CRITICAL, 9.8, "CVE-2022-22965"),
+    ("Maven", "org.apache.struts:struts2-core", "<2.5.30", Severity.CRITICAL, 9.8, "CVE-2023-50164"),
+    ("Maven", "com.alibaba:fastjson", "<1.2.83", Severity.CRITICAL, 9.8, "CVE-2022-25845"),
+    ("Maven", "org.apache.shiro:shiro-core", "<1.7.1", Severity.CRITICAL, 9.8, "CVE-2020-17523"),
+    ("Maven", "com.fasterxml.jackson.core:jackson-databind", "<2.12.7.1", Severity.HIGH, 7.5, "CVE-2020-36518"),
+    ("npm", "jsonwebtoken", "<9.0.0", Severity.CRITICAL, 9.1, "CVE-2022-23540"),
+    ("npm", "ejs", "<3.1.7", Severity.CRITICAL, 9.8, "CVE-2022-29078"),
+    ("npm", "handlebars", "<4.7.7", Severity.HIGH, 8.8, "CVE-2021-23369"),
+    ("npm", "ws", "<7.4.6", Severity.MEDIUM, 5.9, "CVE-2021-32640"),
+    ("PyPI", "gunicorn", "<20.0.0", Severity.HIGH, 7.5, "CVE-2018-1000164"),
 ]
 
 VER_RE = re.compile(r"^\d+(\.\d+)*$")
@@ -73,6 +83,7 @@ def parse_manifests(root: str, excludes: list | None = None):
     deps: dict = {}
     for path, rel in walk_files(root, excludes=excludes):
         base = os.path.basename(rel)
+        ext = os.path.splitext(base)[1].lower()
         parent = os.path.dirname(rel).split("/")[-1] if os.path.dirname(rel) else ""
 
         if base.startswith("requirements") and base.endswith(".txt"):
@@ -136,6 +147,21 @@ def parse_manifests(root: str, excludes: list | None = None):
                 m = re.match(r"\s*gem\s+[\"']([^\"']+)[\"'](?:\s*,\s*[\"']([^\"']+)[\"'])?", line)
                 if m:
                     deps.setdefault(("RubyGems", m.group(1)), {"version": (m.group(2) or "").lstrip("~> >= < "), "manifest": rel, "line": i})
+        elif ext == ".csproj":
+            text = read_text(path)
+            for m in re.finditer(r"<PackageReference\s+Include=\"([^\"]+)\"\s+Version=\"([^\"]+)\"", text):
+                deps.setdefault(("NuGet", m.group(1)), {"version": m.group(2), "manifest": rel, "line": 1})
+        elif base == "Cargo.toml":
+            in_deps = False
+            for i, line in enumerate(read_text(path).splitlines(), 1):
+                if line.startswith("["):
+                    in_deps = line.strip() in ("[dependencies]", "[dev-dependencies]")
+                    continue
+                if not in_deps:
+                    continue
+                m = re.match(r"^([A-Za-z0-9_\-]+)\s*=\s*[\"']?([0-9][^\s\"',]*)", line)
+                if m:
+                    deps.setdefault(("crates.io", m.group(1)), {"version": m.group(2), "manifest": rel, "line": i})
     return deps
 
 

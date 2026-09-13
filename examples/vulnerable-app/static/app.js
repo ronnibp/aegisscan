@@ -28,4 +28,19 @@ function weakHash(input) {
 
 const agent = new https.Agent({ rejectUnauthorized: false }); // TLS disabled
 
+function loginRedirect(req, res) {
+  // open redirect via unvalidated parameter
+  res.redirect(req.query.next);
+}
+
+function applyPrefs(config, req) {
+  // prototype pollution sink: deep-merging request data
+  return deepmerge(config, req.body);
+}
+
+function verifyNone(token) {
+  // JWT alg none accepted
+  return jwt.verify(token, "secret", { algorithms: ["none"] });
+}
+
 app.get("/user", renderUser);

@@ -38,6 +38,26 @@ SUSPECT_PATHS = [
     ("/.aws/credentials", "AWS credentials file exposed", Severity.CRITICAL, ["aws_access_key_id"]),
     ("/composer.json", "composer.json exposed (stack fingerprinting)", Severity.LOW, ["require"]),
     ("/package.json", "package.json exposed (stack fingerprinting)", Severity.LOW, ["dependencies"]),
+    ("/.htpasswd", "Basic-auth password file (.htpasswd) exposed", Severity.CRITICAL,
+     [":$apr1$", ":$2y$", ":{SHA}"]),
+    ("/.env.bak", "Backup environment file exposed", Severity.CRITICAL,
+     ["DB_PASSWORD=", "APP_KEY=", "AWS_SECRET", "SECRET_KEY="]),
+    ("/.env.local", "Local environment file exposed", Severity.CRITICAL,
+     ["DB_PASSWORD=", "APP_KEY=", "AWS_SECRET", "SECRET_KEY="]),
+    ("/id_rsa", "SSH private key exposed", Severity.CRITICAL,
+     ["BEGIN RSA PRIVATE KEY", "BEGIN OPENSSH PRIVATE KEY", "BEGIN PRIVATE KEY"]),
+    ("/.idea/workspace.xml", "JetBrains IDE project files exposed", Severity.MEDIUM,
+     ["<project version=", "WebServer"]),
+    ("/jenkins/login", "Jenkins instance exposed", Severity.HIGH,
+     ["Jenkins", "jenkins"]),
+    ("/manager/html", "Tomcat Manager application exposed", Severity.HIGH,
+     ["Tomcat Manager", "manager-gui"]),
+    ("/adminer.php", "Adminer database tool exposed", Severity.MEDIUM,
+     ["Adminer", "adminer"]),
+    ("/solr/", "Solr admin interface exposed", Severity.MEDIUM,
+     ["Solr Admin", "solr"]),
+    ("/server-info", "Apache server-info module exposed", Severity.MEDIUM,
+     ["Apache Server Information", "server-info"]),
 ]
 
 SQL_ERROR_SIGNATURES = [
@@ -234,11 +254,19 @@ def scan(url: str, max_pages: int = 25, probe_injection: bool = True,
     try:
         r3 = fetch(base, headers={"Origin": "https://evil.example.com"}, timeout=timeout)
         acao = r3.header("access-control-allow-origin")
+        creds = r3.header("access-control-allow-credentials", "").lower() == "true"
         if acao == "https://evil.example.com":
-            findings.append(_mk("CORS reflects arbitrary Origin (ACAO: <attacker>)", Severity.HIGH,
-                                "Access Control", base,
-                                "The server reflects any Origin in Access-Control-Allow-Origin, letting any site read authenticated responses.",
-                                f"Access-Control-Allow-Origin: {acao}",
+            sev = Severity.CRITICAL if creds else Severity.HIGH
+            title = ("CORS reflects arbitrary Origin WITH credentials (authenticated data readable by any site)"
+                     if creds else "CORS reflects arbitrary Origin (ACAO: <attacker>)")
+            desc = ("The server reflects any Origin in Access-Control-Allow-Origin and allows credentials, "
+                    "so any website can read authenticated responses (session hijacking)."
+                    if creds else
+                    "The server reflects any Origin in Access-Control-Allow-Origin, letting any site read responses.")
+            findings.append(_mk(title, sev,
+                                "Access Control", base, desc,
+                                f"Access-Control-Allow-Origin: {acao}"
+                                + ("; Access-Control-Allow-Credentials: true" if creds else ""),
                                 "Validate the Origin against an allow-list instead of echoing it.",
                                 ["https://cheatsheetseries.owasp.org/cheatsheets/HTML5_Security_Cheat_Sheet.html"],
                                 cwe="CWE-942"))
@@ -400,6 +428,71 @@ def scan(url: str, max_pages: int = 25, probe_injection: bool = True,
                                             mitre=["T1190", "T1083", "T1005"], cwe="CWE-22"))
                 except Exception:
                     pass
+    # ---- mixed content / cookie caching / basic auth over HTTP ----------------
+    if base.startswith("https://"):
+        import re as _re
+        active = _re.findall(r"(?:src|href)\s*=\s*[\"']http://[^\"']+[\"']", resp.text[:200000])
+        scripts = [u for u in active if _re.search(r'\.(js|woff)', u) or 'script' in u]
+        if scripts:
+            findings.append(_mk(f"Mixed content: {len(scripts)} active http:// resource(s) on HTTPS page",
+                                Severity.MEDIUM, "Transport Security", base,
+                                "Script/font resources loaded over plain HTTP can be tampered with in transit, defeating HTTPS.",
+                                ", ".join(scripts[:3])[:200],
+                                "Load all subresources over https:// (or protocol-relative upgrades); add upgrade-insecure-requests CSP.",
+                                ["https://developer.mozilla.org/en-US/docs/Web/Security/Mixed_content"],
+                                cwe="CWE-311"))
+    for page_url, r in pages:
+        if r.header("set-cookie"):
+            cc = r.header("cache-control", "").lower()
+            if not any(tok in cc for tok in ("no-store", "no-cache", "private")):
+                findings.append(_mk("Session-bearing response without Cache-Control protection", Severity.LOW,
+                                    "Session Management", page_url,
+                                    "Responses that set cookies can be cached by shared caches/proxies, leaking session data.",
+                                    f"set-cookie present; cache-control: {cc or '(absent)'}",
+                                    "Send Cache-Control: no-store on responses that set session cookies.",
+                                    ["https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html"],
+                                    cwe="CWE-525"))
+                break
+        if (r.header("www-authenticate", "").lower().startswith("basic")
+                and page_url.startswith("http://")):
+            findings.append(_mk("HTTP Basic authentication over unencrypted HTTP", Severity.MEDIUM,
+                                "Authentication", page_url,
+                                "Basic auth sends base64 credentials in cleartext on every request.",
+                                r.header("www-authenticate")[:120],
+                                "Serve the endpoint over HTTPS only (Basic provides no transport protection).",
+                                ["https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html"],
+                                cwe="CWE-319"))
+            break
+
+    # ---- open redirect probe (non-destructive) --------------------------------
+    if probe_injection:
+        from urllib.parse import urlparse as _up
+        evil = "evil-aegisscan-probe.example.org"
+        common_params = ("next", "url", "redirect", "return", "returnTo", "rurl",
+                         "continue", "target", "dest", "destination", "goto", "out", "to")
+        seen_params = {k for _, r in pages for k, _ in parse_qsl(_up(r.url).query)}
+        candidates = list(seen_params | set(common_params))[:12]
+        tested_redirects = 0
+        for pname in candidates:
+            if tested_redirects >= 8:
+                break
+            probe = urlunparse(urlparse(base)._replace(query=urlencode([(pname, f"//{evil}/")])))
+            try:
+                rr = fetch(probe, timeout=timeout, follow=False)
+            except Exception:
+                continue
+            tested_redirects += 1
+            loc = rr.header("location", "")
+            if rr.status in (301, 302, 303, 307, 308) and evil in loc:
+                findings.append(_mk(f"Open redirect via '{pname}' parameter", Severity.MEDIUM,
+                                    "Open Redirect", probe,
+                                    f"The endpoint redirects to an attacker-supplied host ({evil}) — usable for phishing under your domain and to bypass allow-lists.",
+                                    f"{rr.status} Location: {loc[:120]}",
+                                    "Validate the redirect destination against a strict allow-list of paths/hosts; reject absolute and protocol-relative URLs.",
+                                    ["https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html"],
+                                    cwe="CWE-601"))
+                break
+
     prog(100, 100)
     return findings
 

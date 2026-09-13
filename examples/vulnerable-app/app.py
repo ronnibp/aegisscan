@@ -70,6 +70,28 @@ def load_state():
     return str(pickle.loads(request.get_data()))
 
 
+@app.route("/go")
+def go():
+    # sast: open redirect via unvalidated parameter
+    from flask import redirect
+    return redirect(request.args.get("next"))
+
+
+@app.route("/download")
+def download():
+    # sast: path traversal via send_file + os.path.join
+    from flask import send_file
+    p = os.path.join("/srv/files", request.args.get("p", ""))
+    return send_file(p)
+
+
+@app.route("/session")
+def session_token():
+    # sast: JWT signature verification disabled
+    import jwt as pyjwt
+    return str(pyjwt.decode(request.args.get("t", ""), "secret", verify=False))
+
+
 def make_token():
     # sast: insecure randomness
     return "".join(random.choice("abcdef0123456789") for _ in range(32))

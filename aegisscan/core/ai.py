@@ -165,6 +165,11 @@ def save_config(provider: str = "", api_key: str = "", model: str = "",
         cfg["base_url"] = base_url.strip().rstrip("/")
     with open(config_path(), "w", encoding="utf-8") as fh:
         json.dump(cfg, fh, indent=2)
+    try:  # keep the API key readable only by the current user (POSIX)
+        import stat as _stat
+        os.chmod(config_path(), _stat.S_IRUSR | _stat.S_IWUSR)
+    except (OSError, NotImplementedError):
+        pass  # Windows ACLs apply per-user to the profile dir already
     return cfg
 
 

@@ -140,3 +140,15 @@ No SYN/stealth scanning — a connect scan is visible in service logs.
 - Scan risk score: weighted sum of the six highest finding scores
   (weights 1.0 → 0.05) normalized to 10 — one critical dominates many infos.
 - CLI `--fail-on SEVERITY` gates CI on the severity rank.
+
+
+---
+
+## Changelog — coverage additions in 1.2.0
+
+- **Secrets**: 17 → 26 provider patterns (GitLab PAT, npm, PyPI, Telegram, Azure Storage, Facebook, Shopify, Square, X/Twitter).
+- **SAST**: 43 → 70 sinks. New classes: open redirect (4 languages), path traversal (5 languages), JWT `verify=False`/`alg=none` (Python+JS), Jinja2 SSTI, prototype pollution, PHP LFI/RFI, Java JNDI/SpEL/XPath injection, Node `vm`, header injection, `os.popen`, Django `.raw()`, `sh -c`, Razor `Html.Raw`. New infrastructure rules: Kubernetes manifests (privileged, hostPath, hostNetwork, runAsUser 0, allowPrivilegeEscalation, dangerous capabilities) and docker-compose (privileged, cap_add, pid/network_mode host).
+- **Web/DAST**: 18 → 29 exposed-path probes (`.htpasswd`, `.env.bak/.local`, `id_rsa`, Jenkins, Tomcat Manager, Adminer, Solr, server-info, .idea). New checks: open-redirect probe on common parameters, CORS reflection + credentials → CRITICAL, mixed content, cookie responses without Cache-Control, HTTP Basic auth over HTTP.
+- **Network**: 16 → 29 risky-service signatures (etcd, kubelet, YARN, Spark REST, Consul, Mesos, RabbitMQ/ActiveMQ consoles, Cassandra, InfluxDB, Splunk, Prometheus, Grafana-by-banner) over a 76-port default list.
+- **SCA**: offline DB 19 → 29 CVEs (struts2-core, fastjson, shiro, jackson-databind, x/net, jsonwebtoken, ejs, handlebars, ws, gunicorn); new manifest parsers for `.csproj` (NuGet) and `Cargo.toml` (crates.io).
+- **App security fixes**: dashboard Host-header validation (DNS-rebinding defense), 1 MB POST cap, `X-Content-Type-Options: nosniff`, 0600 permissions on the AI config file. See [SECURITY_REVIEW.md](SECURITY_REVIEW.md).

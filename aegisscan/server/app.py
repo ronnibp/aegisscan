@@ -37,6 +37,14 @@ WEB_DIR = os.path.join(os.path.dirname(__file__), "..", "web")
 REGISTRY: dict = {}
 REGISTRY_LOCK = threading.Lock()
 
+# Dashboard security: the server binds 127.0.0.1 only. Validating Host blocks
+# DNS-rebinding, where a malicious page rebinds its hostname to 127.0.0.1 and
+# then drives the API from the browser despite the localhost bind.
+ALLOWED_HOSTS = {h.strip().lower() for h in
+                 os.environ.get("AEGISSCAN_ALLOWED_HOSTS",
+                                 "127.0.0.1,localhost,::1,[::1]").split(",") if h.strip()}
+MAX_BODY_BYTES = 1024 * 1024  # 1 MB request cap
+
 
 def load_saved_scans() -> dict:
     scans_dir = os.path.join(data_dir(), "scans")
@@ -86,11 +94,17 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     # ---------------------------------------------------------------- utils
+    def _guard(self) -> bool:
+        """Block cross-origin/DNS-rebinding requests: Host must be a loopback name."""
+        host = (self.headers.get("Host") or "").split(":")[0].strip().lower().strip("[]")
+        return host in ALLOWED_HOSTS
+
     def _send(self, code: int, body: bytes, ctype: str = "application/json"):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         try:
             self.wfile.write(body)
@@ -104,6 +118,8 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         if length <= 0:
             return {}
+        if length > MAX_BODY_BYTES:
+            raise ValueError("request body too large (limit 1 MB)")
         raw = self.rfile.read(length)
         return json.loads(raw or b"{}")
 
@@ -112,6 +128,8 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------------------------------------------------------------- routing
     def do_GET(self):
+        if not self._guard():
+            return self._json(403, {"error": "blocked: unrecognised Host header"})
         try:
             parsed = urllib.parse.urlparse(self.path)
             path, query = parsed.path, urllib.parse.parse_qs(parsed.query)
@@ -184,6 +202,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(500, {"error": str(e)})
 
     def do_POST(self):
+        if not self._guard():
+            return self._json(403, {"error": "blocked: unrecognised Host header"})
         try:
             path = urllib.parse.urlparse(self.path).path
             load_saved_scans()
@@ -230,6 +250,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(500, {"error": str(e)})
 
     def do_DELETE(self):
+        if not self._guard():
+            return self._json(403, {"error": "blocked: unrecognised Host header"})
         try:
             path = urllib.parse.urlparse(self.path).path
             parts = path.strip("/").split("/")

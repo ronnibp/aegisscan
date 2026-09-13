@@ -213,6 +213,7 @@ python -m aegisscan uninstall --purge-data --yes   # also delete scans, reports,
 ## Documentation
 
 - [User guide](docs/USER_GUIDE.md) — installation on Windows/Linux/macOS, every scan type, dashboard walkthrough, scheduling, CI/CD
+- [Security review](docs/SECURITY_REVIEW.md) — full self-assessment of the app's own security, detection-coverage improvements, and the roadmap toward broader vulnerability discovery
 - [Architecture](docs/ARCHITECTURE.md) — how the engine, scanners and server fit together
 - [MITRE ATT&CK mapping](docs/MITRE_MAPPING.md) — finding → technique reference
 - [Scanning methodology](docs/SCANNERS.md) — exactly what each module checks

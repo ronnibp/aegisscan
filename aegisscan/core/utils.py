@@ -128,10 +128,18 @@ _NO_VERIFY_CTX.check_hostname = False
 _NO_VERIFY_CTX.verify_mode = ssl.CERT_NONE
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Disables redirect following: 3xx surfaces as HTTPError (handled below)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def fetch(url: str, method: str = "GET", headers: dict | None = None,
           timeout: int = 15, data: bytes | None = None,
-          verify: bool = False, max_redirects: int = 5) -> HttpResponse:
-    """Fetch a URL with urllib. verify=False (default) => TLS errors don't block scans."""
+          verify: bool = False, max_redirects: int = 5, follow: bool = True) -> HttpResponse:
+    """Fetch a URL with urllib. verify=False (default) => TLS errors don't block scans.
+    follow=False returns 3xx responses instead of following the redirect."""
     import time
     current, hops = url, 0
     hdrs = {"User-Agent": "AegisScan/1.0 (+security-scanner)", "Accept": "*/*"}
@@ -141,20 +149,26 @@ def fetch(url: str, method: str = "GET", headers: dict | None = None,
         req = urllib.request.Request(current, data=data, headers=hdrs, method=method)
         t0 = time.time()
         try:
-            with urllib.request.urlopen(req, timeout=timeout, context=None if verify else _NO_VERIFY_CTX) as resp:
-                body = resp.read(10 * 1024 * 1024)
-                if resp.headers.get("Content-Encoding") == "gzip":
-                    try:
-                        body = gzip.decompress(body)
-                    except OSError:
-                        pass
-                elif resp.headers.get("Content-Encoding") == "deflate":
-                    try:
-                        body = zlib.decompress(body)
-                    except zlib.error:
-                        pass
-                return HttpResponse(resp.status, dict(resp.headers.items()), body,
-                                    current, time.time() - t0)
+            if follow:
+                with urllib.request.urlopen(req, timeout=timeout, context=None if verify else _NO_VERIFY_CTX) as resp:
+                    body = resp.read(10 * 1024 * 1024)
+                    if resp.headers.get("Content-Encoding") == "gzip":
+                        try:
+                            body = gzip.decompress(body)
+                        except OSError:
+                            pass
+                    elif resp.headers.get("Content-Encoding") == "deflate":
+                        try:
+                            body = zlib.decompress(body)
+                        except zlib.error:
+                            pass
+                    return HttpResponse(resp.status, dict(resp.headers.items()), body,
+                                        current, time.time() - t0)
+            opener = urllib.request.build_opener(
+                _NoRedirect, urllib.request.HTTPSHandler(context=_NO_VERIFY_CTX))
+            with opener.open(req, timeout=timeout) as resp:
+                return HttpResponse(resp.status, dict(resp.headers.items()),
+                                    resp.read(5 * 1024 * 1024), current, time.time() - t0)
         except urllib.error.HTTPError as e:
             body = e.read(5 * 1024 * 1024) or b""
             return HttpResponse(e.code, dict(e.headers.items()) if e.headers else {}, body,
